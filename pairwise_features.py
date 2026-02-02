@@ -53,6 +53,30 @@ def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
     return float(np.dot(vec1, vec2) / (norm1 * norm2))
 
 
+def set_jaccard(s1: frozenset, s2: frozenset) -> float:
+    """Compute Jaccard similarity between two sets."""
+    if not s1 and not s2:
+        return 0.0
+    union = s1 | s2
+    return len(s1 & s2) / len(union) if union else 0.0
+
+
+def set_dice(s1: frozenset, s2: frozenset) -> float:
+    """Compute Dice coefficient between two sets."""
+    if not s1 and not s2:
+        return 0.0
+    total = len(s1) + len(s2)
+    return 2 * len(s1 & s2) / total if total > 0 else 0.0
+
+
+def set_overlap(s1: frozenset, s2: frozenset) -> float:
+    """Compute overlap coefficient between two sets."""
+    if not s1 or not s2:
+        return 0.0
+    min_size = min(len(s1), len(s2))
+    return len(s1 & s2) / min_size if min_size > 0 else 0.0
+
+
 class PairwiseFeatureBuilder:
     """Builds pairwise feature vectors from participant pairs."""
     
@@ -99,6 +123,55 @@ class PairwiseFeatureBuilder:
         'learned_role_sim',       # Learned Role embedding similarity
         'learned_location_sim',   # Learned Location embedding similarity
         'learned_company_sim',    # Learned Company embedding similarity
+        
+        # Contextual Semantic Features (10) - Phase 5 improvements
+        'cos_obj_obj_x_sen_gap',       # Semantic align x Seniority gap
+        'cos_obj_obj_x_role_asym',     # Semantic align x Role asymmetry
+        'cos_obj_obj_x_industry',      # Semantic align x Industry match
+        'cos_obj_con_x_sen_gap',       # Conflict x Seniority gap
+        'cos_obj_con_x_role_asym',     # Conflict x Role asymmetry
+        'cos_con_obj_x_sen_gap',       # Rev Conflict x Seniority gap
+        'cos_con_obj_x_industry',      # Rev Conflict x Industry match
+        'interests_jaccard_x_sen_gap', # Interests x Seniority gap
+        'interests_overlap_x_industry',# Interests x Industry match
+        'interests_jaccard_x_role_asym',# Interests x Role asymmetry
+        
+        # ============ RAW TEXT SET FEATURES (Phase 6 - Reference Notebook) ============
+        # These are the KEY features from the reference notebook that achieved 0.00037 MSE
+        
+        # Jaccard on raw text sets (5)
+        'j_all',                  # Jaccard(ALL, ALL) - union of BI+BO+CO
+        'j_bi',                   # Jaccard(BI, BI) - Business Interests
+        'j_bo',                   # Jaccard(BO, BO) - Business Objectives
+        'j_co',                   # Jaccard(CO, CO) - Constraints
+        'j_bi_bo',                # Jaccard(BI+BO, BI+BO)
+        
+        # Dice coefficient (3)
+        'dice_all',               # Dice(ALL, ALL)
+        'dice_bi',                # Dice(BI, BI)
+        'dice_bo',                # Dice(BO, BO)
+        
+        # Overlap coefficient (2)
+        'overlap_all',            # Overlap(ALL, ALL)
+        'overlap_bi',             # Overlap(BI, BI)
+        
+        # Set sizes (8)
+        'bi_size_1', 'bi_size_2', # |BI| for src and dst
+        'bo_size_1', 'bo_size_2', # |BO| for src and dst
+        'all_size_1', 'all_size_2', # |ALL| for src and dst
+        'all_inter', 'all_union', # |ALL ∩ ALL|, |ALL ∪ ALL|
+        
+        # Cross-category features (3) - CRITICAL
+        'bi_bo_cross',            # |BI₁ ∩ BO₂| + |BO₁ ∩ BI₂|
+        'bi_co_cross',            # |BI₁ ∩ CO₂| + |CO₁ ∩ BI₂|
+        'bo_co_cross',            # |BO₁ ∩ CO₂| + |CO₁ ∩ BO₂|
+        
+        # Polynomial features (5)
+        'j_all_sq',               # j_all²
+        'j_bi_sq',                # j_bi²
+        'j_all_j_bi',             # j_all × j_bi
+        'j_all_j_bo',             # j_all × j_bo
+        'j_bi_j_bo',              # j_bi × j_bo
     ]
     
     def __init__(self, participants: Dict[int, Dict], 
@@ -292,9 +365,104 @@ class PairwiseFeatureBuilder:
                 else:
                     sim = 0.0
             else:
-                # Fallback to binary match if no learned embeddings
                 sim = 0.0
             features.append(sim)
+
+        # ============ CONTEXTUAL SEMANTIC FEATURES (Phase 5) ============
+        # Modulate semantic similarity by professional context
+        
+        # Define context variables
+        seniority_gap = abs(seniority_diff)
+        role_asym = 1.0 - role_match
+        
+        # 35. Semantic alignment x Seniority gap (Does alignment matter more/less if seniority differs?)
+        features.append(cos_obj_obj * seniority_gap)
+        
+        # 36. Semantic alignment x Role asymmetry (Alignment across different roles)
+        features.append(cos_obj_obj * role_asym)
+        
+        # 37. Semantic alignment x Industry (Alignment within same industry)
+        features.append(cos_obj_obj * industry_match)
+        
+        # 38. Conflict (Obj-Con) x Seniority gap
+        features.append(cos_obj_con * seniority_gap)
+        
+        # 39. Conflict (Obj-Con) x Role asym
+        features.append(cos_obj_con * role_asym)
+        
+        # 40. Reverse Conflict (Con-Obj) x Seniority gap
+        features.append(cos_con_obj * seniority_gap)
+        
+        # 41. Reverse Conflict (Con-Obj) x Industry
+        features.append(cos_con_obj * industry_match)
+        
+        # 42. Interests Jaccard x Seniority gap
+        features.append(interests_jaccard * seniority_gap)
+        
+        # 43. Interests Overlap x Industry
+        features.append(interests_overlap * industry_match)
+        
+        # 44. Interests Jaccard x Role asymmetry
+        features.append(interests_jaccard * role_asym)
+        
+        # ============ RAW TEXT SET FEATURES (Phase 6) ============
+        # These are the KEY features from the reference notebook
+        
+        # Get raw text sets from participants
+        src_bi = src.get('BI', frozenset())
+        dst_bi = dst.get('BI', frozenset())
+        src_bo = src.get('BO', frozenset())
+        dst_bo = dst.get('BO', frozenset())
+        src_co = src.get('CO', frozenset())
+        dst_co = dst.get('CO', frozenset())
+        src_all = src.get('ALL', frozenset())
+        dst_all = dst.get('ALL', frozenset())
+        src_bi_bo = src.get('BI_BO', frozenset())
+        dst_bi_bo = dst.get('BI_BO', frozenset())
+        
+        # Jaccard similarities (5)
+        j_all = set_jaccard(src_all, dst_all)
+        j_bi = set_jaccard(src_bi, dst_bi)
+        j_bo = set_jaccard(src_bo, dst_bo)
+        j_co = set_jaccard(src_co, dst_co)
+        j_bi_bo = set_jaccard(src_bi_bo, dst_bi_bo)
+        
+        features.append(j_all)
+        features.append(j_bi)
+        features.append(j_bo)
+        features.append(j_co)
+        features.append(j_bi_bo)
+        
+        # Dice coefficients (3)
+        features.append(set_dice(src_all, dst_all))
+        features.append(set_dice(src_bi, dst_bi))
+        features.append(set_dice(src_bo, dst_bo))
+        
+        # Overlap coefficients (2)
+        features.append(set_overlap(src_all, dst_all))
+        features.append(set_overlap(src_bi, dst_bi))
+        
+        # Set sizes (8)
+        features.append(len(src_bi))
+        features.append(len(dst_bi))
+        features.append(len(src_bo))
+        features.append(len(dst_bo))
+        features.append(len(src_all))
+        features.append(len(dst_all))
+        features.append(len(src_all & dst_all))  # Intersection
+        features.append(len(src_all | dst_all))  # Union
+        
+        # Cross-category features (3) - CRITICAL
+        features.append(len(src_bi & dst_bo) + len(src_bo & dst_bi))  # BI-BO cross
+        features.append(len(src_bi & dst_co) + len(src_co & dst_bi))  # BI-CO cross
+        features.append(len(src_bo & dst_co) + len(src_co & dst_bo))  # BO-CO cross
+        
+        # Polynomial features (5)
+        features.append(j_all ** 2)
+        features.append(j_bi ** 2)
+        features.append(j_all * j_bi)
+        features.append(j_all * j_bo)
+        features.append(j_bi * j_bo)
         
         return np.array(features, dtype=np.float32)
     

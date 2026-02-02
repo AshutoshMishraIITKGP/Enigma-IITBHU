@@ -25,6 +25,23 @@ MULTI_LABEL_COL = 'Business_Interests'
 SENIORITY_ORDER = {'Junior': 0, 'Mid-Level': 1, 'Senior': 2, 'Executive': 3}
 
 
+def normalize_token(x: str) -> str:
+    """Normalize a token for text set matching."""
+    import re
+    x = str(x).lower().strip()
+    x = re.sub(r'\s+', ' ', x)
+    x = re.sub(r'[^\w\s]', '', x)  # Remove punctuation
+    return x.replace('&', 'and')
+
+
+def parse_text_set(val) -> frozenset:
+    """Parse semicolon-separated text into a frozen set of normalized tokens."""
+    import pandas as pd
+    if pd.isna(val) or str(val).strip() in ('', 'nan'):
+        return frozenset()
+    return frozenset(normalize_token(t) for t in str(val).split(';') if t.strip())
+
+
 class FeatureProcessor:
     """Handles all feature processing for participant profiles."""
     
@@ -166,7 +183,16 @@ class FeatureProcessor:
             # Raw text (for embedding later)
             'objectives_text': str(row['Business_Objectives']) if not pd.isna(row['Business_Objectives']) else '',
             'constraints_text': str(row['Constraints']) if not pd.isna(row['Constraints']) else '',
+            
+            # Raw text SETS (for Jaccard similarity - key feature from reference notebook)
+            'BI': parse_text_set(row.get(MULTI_LABEL_COL, '')),      # Business Interests as set
+            'BO': parse_text_set(row.get('Business_Objectives', '')), # Business Objectives as set
+            'CO': parse_text_set(row.get('Constraints', '')),         # Constraints as set
         }
+        
+        # Combined set (union of BI, BO, CO)
+        features['ALL'] = features['BI'] | features['BO'] | features['CO']
+        features['BI_BO'] = features['BI'] | features['BO']  # Combined BI+BO
         
         return features
     
