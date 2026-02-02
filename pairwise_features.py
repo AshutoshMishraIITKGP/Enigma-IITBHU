@@ -172,6 +172,9 @@ class PairwiseFeatureBuilder:
         'j_all_j_bi',             # j_all × j_bi
         'j_all_j_bo',             # j_all × j_bo
         'j_bi_j_bo',              # j_bi × j_bo
+        
+        # Cross-column semantic match (from second reference notebook)
+        'obj_int_match',          # |src.Objectives ∩ dst.Interests| - key semantic feature
     ]
     
     def __init__(self, participants: Dict[int, Dict], 
@@ -463,6 +466,10 @@ class PairwiseFeatureBuilder:
         features.append(j_all * j_bi)
         features.append(j_all * j_bo)
         features.append(j_bi * j_bo)
+        
+        # Cross-column semantic match (from second reference notebook)
+        # "Does what src wants (Objectives) align with what dst is interested in (Interests)?"
+        features.append(len(src_bo & dst_bi))  # obj_int_match: |src.Objectives ∩ dst.Interests|
         
         return np.array(features, dtype=np.float32)
     
