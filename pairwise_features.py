@@ -175,6 +175,11 @@ class PairwiseFeatureBuilder:
         
         # Cross-column semantic match (from second reference notebook)
         'obj_int_match',          # |src.Objectives ∩ dst.Interests| - key semantic feature
+        
+        # Latent Graph Features (3) - Phase 7
+        'svd_dot',                # Dot product of latent vectors (predicted compatibility)
+        'svd_cosine',             # Cosine similarity of latent vectors
+        'svd_euclidean',          # Euclidean distance of latent vectors
     ]
     
     def __init__(self, participants: Dict[int, Dict], 
@@ -182,7 +187,8 @@ class PairwiseFeatureBuilder:
                  objectives_id_map: Dict[int, int],
                  constraints_embeddings: np.ndarray,
                  constraints_id_map: Dict[int, int],
-                 learned_embeddings: Dict[int, Dict] = None):
+                 learned_embeddings: Dict[int, Dict] = None,
+                 svd_embeddings: Dict[int, np.ndarray] = None):
         """
         Initialize with participant features and embeddings.
         
@@ -200,6 +206,7 @@ class PairwiseFeatureBuilder:
         self.con_emb = constraints_embeddings
         self.con_map = constraints_id_map
         self.learned_emb = learned_embeddings or {}
+        self.svd_emb = svd_embeddings or {}
     
     def get_objectives_embedding(self, profile_id: int) -> np.ndarray:
         """Get objectives embedding for a profile."""
@@ -467,9 +474,31 @@ class PairwiseFeatureBuilder:
         features.append(j_all * j_bo)
         features.append(j_bi * j_bo)
         
-        # Cross-column semantic match (from second reference notebook)
         # "Does what src wants (Objectives) align with what dst is interested in (Interests)?"
         features.append(len(src_bo & dst_bi))  # obj_int_match: |src.Objectives ∩ dst.Interests|
+        
+        # ============ SVD / LATENT FEATURES (Phase 7) ============
+        src_svd = self.svd_emb.get(src_id)
+        dst_svd = self.svd_emb.get(dst_id)
+        
+        if src_svd is not None and dst_svd is not None:
+            # 1. Dot product (Interaction Strength)
+            features.append(np.dot(src_svd, dst_svd))
+            
+            # 2. Cosine Similarity (Preference Alignment)
+            norm_src = np.linalg.norm(src_svd)
+            norm_dst = np.linalg.norm(dst_svd)
+            if norm_src > 0 and norm_dst > 0:
+                features.append(np.dot(src_svd, dst_svd) / (norm_src * norm_dst))
+            else:
+                features.append(0.0)
+                
+            # 3. Euclidean Distance (Latent Distance)
+            features.append(np.linalg.norm(src_svd - dst_svd))
+        else:
+            features.append(0.0)
+            features.append(0.0)
+            features.append(0.0)
         
         return np.array(features, dtype=np.float32)
     

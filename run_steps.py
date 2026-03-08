@@ -114,6 +114,34 @@ def step2_learned_embeddings():
     save_checkpoint(step_name)
 
 
+# ============== STEP 2b: Train Graph SVD ==============
+def step2b_train_svd():
+    """Train SVD on interaction graph."""
+    step_name = 'step2b_train_svd'
+    
+    if is_step_completed(step_name):
+        print(f"[SKIP] {step_name} already completed")
+        return
+    
+    if os.path.exists('models/graph_svd.pkl'):
+        print("[SKIP] Graph SVD model already exists")
+        save_checkpoint(step_name)
+        return
+    
+    print_header("STEP 2b: Training Graph SVD Features")
+    
+    from feature_engineering import load_data
+    from svd_features import GraphSVDModel
+    
+    _, _, target_df = load_data()
+    
+    svd = GraphSVDModel(n_components=32)
+    svd.fit(target_df)
+    svd.save()
+    
+    save_checkpoint(step_name)
+
+
 # ============== STEP 3: Generate Embeddings ==============
 def step3_generate_embeddings():
     """Generate embeddings using fine-tuned model."""
@@ -154,7 +182,7 @@ def step4_train_model(trials: int = 50):
     from feature_engineering import load_data, FeatureProcessor
     from embedding_generation import EmbeddingGenerator
     from pairwise_features import PairwiseFeatureBuilder
-    from model_training import EnsembleModel, prepare_training_data
+    from model_training import StackingEnsembleModel, prepare_training_data
     
     train_df, test_df, target_df = load_data()
     
@@ -177,6 +205,13 @@ def step4_train_model(trials: int = 50):
         encoder = LearnedCategoricalEncoder.load('models/learned_embeddings.pkl')
         learned_embeddings = encoder.encode(train_df)
     
+    # Load SVD embeddings
+    svd_embeddings = None
+    if os.path.exists('models/graph_svd.pkl'):
+        from svd_features import GraphSVDModel
+        svd_model = GraphSVDModel.load('models/graph_svd.pkl')
+        svd_embeddings = svd_model.get_all_embeddings()
+    
     # Build pairwise features
     builder = PairwiseFeatureBuilder(
         participants=train_participants,
@@ -184,21 +219,22 @@ def step4_train_model(trials: int = 50):
         objectives_id_map=embeddings['train_objectives_id_map'],
         constraints_embeddings=embeddings['train_constraints'],
         constraints_id_map=embeddings['train_constraints_id_map'],
-        learned_embeddings=learned_embeddings
+        learned_embeddings=learned_embeddings,
+        svd_embeddings=svd_embeddings
     )
     
     # Prepare training data
     X_train, X_val, y_train, y_val = prepare_training_data(target_df, builder)
     print(f"Feature count: {X_train.shape[1]}")
     
-    # Train ensemble
-    model = EnsembleModel()
+    # Train stacking ensemble
+    model = StackingEnsembleModel()
     metrics = model.train(
         X_train, y_train, X_val, y_val,
         feature_names=builder.FEATURE_NAMES,
         n_trials=trials
     )
-    model.save()
+    model.save()  # Saves to stacking_ensemble.pkl
     
     # Feature importance
     importance = model.get_feature_importance()
@@ -221,7 +257,7 @@ def step5_predict():
     from feature_engineering import load_data, FeatureProcessor
     from embedding_generation import EmbeddingGenerator
     from pairwise_features import PairwiseFeatureBuilder
-    from model_training import EnsembleModel
+    from model_training import StackingEnsembleModel
     from inference import run_inference, validate_submission
     
     train_df, test_df, _ = load_data()
@@ -241,6 +277,13 @@ def step5_predict():
         from learned_embeddings import LearnedCategoricalEncoder
         encoder = LearnedCategoricalEncoder.load('models/learned_embeddings.pkl')
         learned_embeddings = encoder.encode(test_df)
+        
+    # Load SVD embeddings for inference
+    svd_embeddings = None
+    if os.path.exists('models/graph_svd.pkl'):
+        from svd_features import GraphSVDModel
+        svd_model = GraphSVDModel.load('models/graph_svd.pkl')
+        svd_embeddings = svd_model.get_all_embeddings()
     
     builder = PairwiseFeatureBuilder(
         participants=test_participants,
@@ -248,10 +291,11 @@ def step5_predict():
         objectives_id_map=embeddings['test_objectives_id_map'],
         constraints_embeddings=embeddings['test_constraints'],
         constraints_id_map=embeddings['test_constraints_id_map'],
-        learned_embeddings=learned_embeddings
+        learned_embeddings=learned_embeddings,
+        svd_embeddings=svd_embeddings
     )
     
-    model = EnsembleModel.load('models/ensemble_model.pkl')
+    model = StackingEnsembleModel.load('models/stacking_ensemble.pkl')
     
     test_ids = test_df['Profile_ID'].tolist()
     submission = run_inference(model, builder, test_ids)
@@ -263,7 +307,7 @@ def step5_predict():
 
 def main():
     parser = argparse.ArgumentParser(description='Step-by-step training with checkpointing')
-    parser.add_argument('step', choices=['step1', 'step2', 'step3', 'step4', 'step5', 'all', 'reset'],
+    parser.add_argument('step', choices=['step1', 'step2', 'step2b', 'step3', 'step4', 'step5', 'all', 'reset'],
                         help='Which step to run')
     parser.add_argument('--trials', type=int, default=50, help='Optuna trials for step4')
     
@@ -277,6 +321,8 @@ def main():
         step1_finetune_sbert()
     elif args.step == 'step2':
         step2_learned_embeddings()
+    elif args.step == 'step2b':
+        step2b_train_svd()
     elif args.step == 'step3':
         step3_generate_embeddings()
     elif args.step == 'step4':
@@ -286,6 +332,7 @@ def main():
     elif args.step == 'all':
         step1_finetune_sbert()
         step2_learned_embeddings()
+        step2b_train_svd()
         step3_generate_embeddings()
         step4_train_model(args.trials)
         step5_predict()

@@ -46,9 +46,18 @@ models/
 *.bin
 finetuned_sbert/
 
+# Training artifacts
+catboost_info/
+checkpoints/
+embeddings_cache/
+
+# Archives
+project_submission.zip
+
 # IDEs
 .vscode/
 .idea/
+.gemini/
 
 # OS
 .DS_Store
